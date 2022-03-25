@@ -4,6 +4,62 @@
 #include <iostream>
 #include <windows.h>
 
+#define IOCTL_STARTUP                                             \
+    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x921, METHOD_IN_DIRECT, FILE_READ_DATA | \
+        FILE_WRITE_DATA)
+#define IOCTL_RECV                                             \
+    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x922, METHOD_IN_DIRECT, FILE_READ_DATA | \
+        FILE_WRITE_DATA)
+#define IOCTL_SHUTDOWN                                       \
+    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x923, METHOD_IN_DIRECT, FILE_READ_DATA | \
+        FILE_WRITE_DATA)
+
+#pragma pack(push, 1)
+typedef union
+{
+	struct
+	{
+		UINT64 addr;                // WINDIVERT_ADDRESS pointer.
+		UINT64 addr_len_ptr;        // sizeof(addr) pointer.
+	} recv;
+	struct
+	{
+		UINT64 addr;                // WINDIVERT_ADDRESS pointer.
+		UINT64 addr_len;            // sizeof(addr).
+	} send;
+	struct
+	{
+		UINT32 layer;               // Handle layer.
+		UINT32 priority;            // Handle priority.
+		UINT64 flags;               // Handle flags.
+	} initialize;
+	struct
+	{
+		UINT64 flags;               // Filter flags.
+	} startup;
+	struct
+	{
+		UINT32 how;                 // WINDIVERT_SHUTDOWN_*
+	} shutdown;
+	struct
+	{
+		UINT32 param;               // WINDIVERT_PARAM_*
+	} get_param;
+	struct
+	{
+		UINT64 val;                 // Value pointer.
+		UINT32 param;               // WINDIVERT_PARAM_*
+	} set_param;
+} WINDIVERT_IOCTL, * PWINDIVERT_IOCTL;
+#pragma pack(pop)
+
+typedef struct
+{
+	INT32 processId;
+	INT32 parentId;
+	BOOLEAN isCreate;
+}CUSTOMERDATA, *PCUSTOMERDATA;
+
 static DWORD tls_idx;
 static BOOL IoControlEx(HANDLE handle, DWORD code,
 	PVOID ioctl, PVOID buf, UINT len, UINT* iolen,
@@ -35,35 +91,39 @@ int main()
 	printf("create succ \n");
 	system("pause");
 	//创建一个缓冲区进行读写
-   /*UCHAR buffer[100];
-   UINT size;
-
-   BOOL ret = false;
-   BOOL out = false;
-   while (true)
-   {
-	   ret = IoControl(handle, 0, nullptr, buffer, 100, &size);
-	   if (ret == FALSE)
-	   {
-		   switch (getchar())
-		   {
-		   case '0':
-			   out = true;
-			   break;
-		   }
-	   }
-	   else
-	   {
-		   out = false;
-	   }
-	   if (out)
-	   {
-		   break;
-	   }
-	   Sleep(1);
-   }*/
-
-
+	PCUSTOMERDATA buffer = new CUSTOMERDATA();
+	UINT size;
+	WINDIVERT_IOCTL ioctl;
+	memset(&ioctl, 0, sizeof(ioctl));
+	ioctl.recv.addr = (UINT64)(ULONG_PTR)buffer;
+	ioctl.recv.addr_len_ptr = (UINT64)(ULONG_PTR)NULL;
+	BOOL ret = false;
+	BOOL out = false;
+	while (true)
+	{
+		ret = IoControl(handle, IOCTL_RECV, &ioctl, NULL, 0, &size);
+		if (ret == FALSE)
+		{
+			printf("IoControl failed \n");
+			switch (getchar())
+			{
+			case '0':
+				out = true;
+				break;
+			}
+		}
+		else
+		{
+			out = false;
+			printf("%d-%d-%d-%d\n",size,buffer->parentId,buffer->processId,buffer->isCreate);
+		}
+		if (out)
+		{
+			break;
+		}
+		Sleep(100);
+	}
+	printf("out \n");
    //// 从设备中读取数据
    //BOOL result = ReadFile(hDevice,buffer,10,&size,NULL);
    //if (result)
@@ -107,7 +167,7 @@ static BOOL InstallService()
 	// Create the service:
 	service = CreateService(manager, L"kmdfTest",
 		L"kmdfTest", SERVICE_ALL_ACCESS, SERVICE_KERNEL_DRIVER,
-		SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL, L"C:\\Users\\vvx\\Desktop\\kmdf.sys", NULL, NULL,
+		SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL, L"C:\\Users\\vvx\\Desktop\\bin\\kmdf.sys", NULL, NULL,
 		NULL, NULL, NULL);
 	if (service == NULL)
 	{

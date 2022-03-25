@@ -442,7 +442,7 @@ VOID kmdf_caller_context(IN WDFDEVICE device, IN WDFREQUEST request)
 			if (addr_len < sizeof(CUSTOMERDATA))
 			{
 				status = STATUS_INVALID_PARAMETER;
-				KdPrint(("[MyWDFDevice]out-of-range address length (%u) for RECVioctl:%x-%d", status, addr_len));
+				KdPrint(("[MyWDFDevice]out-of-range address length (%u) for RECV ioctl:%x-%lld", status, addr_len));
 				goto caller_context_error;
 			}
 			if (addr == NULL)
@@ -473,6 +473,8 @@ VOID kmdf_caller_context(IN WDFDEVICE device, IN WDFREQUEST request)
 	req_context->addr = addr;
 	req_context->addr_len = (UINT32)addr_len;
 	req_context->addr_len_ptr = addr_len_ptr;
+	KdPrint(("[MyWDFDevice]kmdf_caller_context 7"));
+	return;
 caller_context_exit:
 	status = WdfDeviceEnqueueRequest(device, request);
 

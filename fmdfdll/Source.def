@@ -1,0 +1,5 @@
+LIBRARY fmdfdll
+EXPORTS
+	kmdfOpen
+	kmdfRevc
+	kmdfClose

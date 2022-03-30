@@ -13,7 +13,9 @@ using namespace std;
 #define DEVICE_NAME L"\\\\.\\_ProcessMonitor"
 
 static BOOL InstallService();
-
+typedef void(*PrintCallback)(const char*);
+static PrintCallback _print = NULL;
+#define PRINTOUT(MSG) if(_print!=NULL)_print(MSG);
 /*
  * Thread local.
  */
@@ -193,10 +195,15 @@ static BOOL IoControlEx(HANDLE handle, DWORD code,
 	BOOL result;
 	DWORD iolen0;
 
-	result = DeviceIoControl(handle, code, NULL, 0, &buf, (DWORD)len, &iolen0, overlapped);
+	char pinfo[256];
+	ZeroMemory(pinfo, 256 * sizeof(char));
+	PRINTOUT(pinfo);
+	static PROCESSINFO outBuff;
+	result = DeviceIoControl(handle, code, NULL, 0, (PVOID)&outBuff, (DWORD)sizeof(PROCESSINFO), &iolen0, overlapped);
 	if (result && iolen != NULL)
 	{
 		*iolen = (UINT)iolen0;
+		memcpy(buf, &outBuff, len);
 	}
 	return result;
 }
@@ -209,7 +216,6 @@ static BOOL IoControl(HANDLE handle, DWORD code,PVOID buf, UINT len, UINT* iolen
 	OVERLAPPED overlapped;
 	DWORD iolen0;
 	HANDLE event;
-
 	event = (HANDLE)TlsGetValue(tls_idx);
 	if (event == (HANDLE)NULL)
 	{
@@ -260,4 +266,14 @@ BOOL kmdfRevc(HANDLE handle, PVOID pPacket, UINT packetLen,
 BOOL kmdfClose(HANDLE handle)
 {
 	return CloseHandle(handle);
+}
+
+void setPrintCallBack(PrintCallback cb)
+{
+	_print = cb;
+}
+
+void testPrintCallBack(const char* msg)
+{
+	PRINTOUT(msg);
 }

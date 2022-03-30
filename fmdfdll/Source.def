@@ -3,3 +3,5 @@ EXPORTS
 	kmdfOpen
 	kmdfRevc
 	kmdfClose
+	setPrintCallBack
+	testPrintCallBack

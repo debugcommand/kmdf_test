@@ -8,6 +8,7 @@
 KSPIN_LOCK		g_Lock;			// 用于链表的锁
 LIST_ENTRY		g_ListHead;		// 链表头
 KEVENT			g_Event;		// 用于通知的事件
+BOOLEAN			g_Collect;		// 开始收集
 
 VOID CreateProcessRoutineSpy(
 	IN HANDLE  parentId, IN HANDLE  processId, IN BOOLEAN  isCreate
@@ -73,17 +74,12 @@ NTSTATUS CreateCompleteRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 	NTSTATUS status = STATUS_SUCCESS;
 
 	KdPrint(("[t]Create...\r\n"));
-	// 创建进程监视回调
-	status = PsSetCreateProcessNotifyRoutine(CreateProcessRoutineSpy, FALSE);
-	if (!NT_SUCCESS(status))
-	{
-		KdPrint(("[t]Failed to call PsSetCreateProcessNotifyRoutineEx, error code = 0x%08X\r\n", status));
-	}
 	pIrp->IoStatus.Status = status;
 	pIrp->IoStatus.Information = 0;
 	// 设置 Irp 请求已经处理完成，不要再继续传递
 	IoCompleteRequest(pIrp, IO_NO_INCREMENT);
 
+	g_Collect = TRUE;
 	return status;
 }
 
@@ -92,17 +88,12 @@ NTSTATUS CloseCompleteRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 	NTSTATUS status = STATUS_SUCCESS;
 
 	KdPrint(("[t]Close...\r\n"));
-	// 恢复进程监控回调
-	status = PsSetCreateProcessNotifyRoutine(CreateProcessRoutineSpy, TRUE);
-	if (!NT_SUCCESS(status))
-	{
-		KdPrint(("[t]Failed to call PsSetCreateProcessNotifyRoutineEx, error code = 0x%08X\r\n", status));
-	}
 	pIrp->IoStatus.Status = status;
 	pIrp->IoStatus.Information = 0;
 	// 设置 Irp 请求已经处理完成，不要再继续传递
 	IoCompleteRequest(pIrp, IO_NO_INCREMENT);
 
+	g_Collect = FALSE;
 	return status;
 }
 
@@ -184,6 +175,7 @@ NTSTATUS DeviceControlCompleteRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 						pProcessInfo->processId = pNode->pProcessInfo->processId;
 						pProcessInfo->isCreate = pNode->pProcessInfo->isCreate;
 						uLength = sizeof(PROCESSINFO);
+						KdPrint(("[t]io PPID = %d, PID = %d,New=%d..\r\n", pProcessInfo->parentId, pProcessInfo->processId, pProcessInfo->isCreate));
 						// 释放内存
 						ExFreePoolWithTag(pNode->pProcessInfo, MEM_TAG);
 					}
@@ -221,6 +213,11 @@ VOID CreateProcessRoutineSpy(
 	IN HANDLE  parentId, IN HANDLE  processId, IN BOOLEAN  isCreate
 )
 {
+	if (!g_Collect)
+	{
+		KdPrint(("[t]ignore PPID = %d, PID = %d,New=%d..\r\n", parentId, processId, isCreate));
+		return;
+	}
 	// 创建一个链表节点
 	PPROCESSNODE pNode = InitListNode();
 	if (pNode != NULL)
@@ -257,6 +254,15 @@ VOID DriverUnLoad(PDRIVER_OBJECT pDriverObject)
 		IoDeleteDevice(pDriverObject->DeviceObject);
 		KdPrint(("[t]Unload driver success..\r\n"));
 	}
+
+	g_Collect = FALSE;
+	// 恢复进程监控回调
+	NTSTATUS status = PsSetCreateProcessNotifyRoutine(CreateProcessRoutineSpy, TRUE);
+	if (!NT_SUCCESS(status))
+	{
+		KdPrint(("[t]Failed to call PsSetCreateProcessNotifyRoutineEx, error code = 0x%08X\r\n", status));
+	}
+
 	// 释放链表所有内存
 	while (TRUE)
 	{
@@ -299,6 +305,14 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT pDriverObject, PUNICODE_STRING pRegistryPath
 	pDriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = DeviceControlCompleteRoutine;
 
 	pDriverObject->DriverUnload = DriverUnLoad;
+
+	g_Collect = FALSE;
+	// 创建进程监视回调
+	status = PsSetCreateProcessNotifyRoutine(CreateProcessRoutineSpy, FALSE);
+	if (!NT_SUCCESS(status))
+	{
+		KdPrint(("[t]Failed to call PsSetCreateProcessNotifyRoutineEx, error code = 0x%08X\r\n", status));
+	}
 
 	return status;
 }

@@ -195,9 +195,9 @@ static BOOL IoControlEx(HANDLE handle, DWORD code,
 	BOOL result;
 	DWORD iolen0;
 
-	char pinfo[256];
-	ZeroMemory(pinfo, 256 * sizeof(char));
-	PRINTOUT(pinfo);
+	//char pinfo[256];
+	//ZeroMemory(pinfo, 256 * sizeof(char));
+	//PRINTOUT(pinfo);
 	static PROCESSINFO outBuff;
 	result = DeviceIoControl(handle, code, NULL, 0, (PVOID)&outBuff, (DWORD)sizeof(PROCESSINFO), &iolen0, overlapped);
 	if (result && iolen != NULL)
@@ -276,4 +276,69 @@ void setPrintCallBack(PrintCallback cb)
 void testPrintCallBack(const char* msg)
 {
 	PRINTOUT(msg);
+}
+
+static BOOL ReadDeviceEx(HANDLE handle,PVOID buf, UINT len, UINT* iolen,
+	LPOVERLAPPED overlapped)
+{
+	BOOL result;
+	DWORD iolen0;
+
+	//char pinfo[256];
+	//ZeroMemory(pinfo, 256 * sizeof(char));
+	//PRINTOUT(pinfo);
+	static PROCESSINFO outBuff;
+	result = ReadFile(handle, (PVOID)&outBuff, (DWORD)sizeof(PROCESSINFO), &iolen0, overlapped);
+	if (result && iolen != NULL)
+	{
+		*iolen = (UINT)iolen0;
+		memcpy(buf, &outBuff, len);
+	}
+	return result;
+}
+
+static BOOL ReadDevice(HANDLE handle, PVOID buf, UINT len, UINT* iolen)
+{
+	OVERLAPPED overlapped;
+	DWORD iolen0;
+	HANDLE event;
+	event = (HANDLE)TlsGetValue(tls_idx);
+	if (event == (HANDLE)NULL)
+	{
+		event = CreateEvent(NULL, FALSE, FALSE, NULL);
+		if (event == NULL)
+		{
+			return FALSE;
+		}
+		TlsSetValue(tls_idx, (LPVOID)event);
+	}
+
+	memset(&overlapped, 0, sizeof(overlapped));
+	overlapped.hEvent = event;
+	if (!ReadDeviceEx(handle, buf, len, iolen,&overlapped))
+	{
+		if (GetLastError() != ERROR_IO_PENDING ||
+			!GetOverlappedResult(handle, &overlapped, &iolen0, TRUE))
+		{
+			return FALSE;
+		}
+		if (iolen != NULL)
+		{
+			*iolen = (UINT)iolen0;
+		}
+	}
+	return TRUE;
+}
+
+BOOL kmdfRead(HANDLE handle, PVOID pPacket, UINT packetLen,
+	UINT* readLen, LPOVERLAPPED overlapped)
+{
+	if (overlapped == NULL)
+	{
+		return ReadDevice(handle,pPacket, packetLen, readLen);
+	}
+	else
+	{
+		return ReadDeviceEx(handle,pPacket, packetLen, readLen, overlapped);
+	}
 }

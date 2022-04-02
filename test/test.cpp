@@ -16,11 +16,13 @@ typedef void(*PrintCallback)(const char*);
 
 typedef HANDLE  (*kmdfOpen)();
 typedef BOOL    (*kmdfRevc)(HANDLE, PVOID, UINT,UINT*, LPOVERLAPPED);
+typedef BOOL    (*kmdfRead)(HANDLE, PVOID, UINT, UINT*, LPOVERLAPPED);
 typedef BOOL    (*kmdfClose)(HANDLE);
 typedef void    (*setPrintCallBack)(PrintCallback);
 typedef void    (*testPrintCallBack)(const char*);
 static kmdfOpen _kmdfOpen;
 static kmdfRevc _kmdfRevc;
+static kmdfRead _kmdfRead;
 static kmdfClose _kmdfClose;
 static setPrintCallBack _setPrintCallBack;
 static testPrintCallBack _testPrintCallBack;
@@ -49,6 +51,7 @@ bool InitLibrary()
         || X(_kmdfClose, kmdfClose)
         || X(_setPrintCallBack, setPrintCallBack)
         || X(_testPrintCallBack, testPrintCallBack)
+        || X(_kmdfRead, kmdfRead)
         )
     {
         printf("load library error:%d\n", GetLastError());
@@ -131,6 +134,32 @@ int main()
                 wstring ppname = GetModuleName(pinfo.parentId);
                 wstring pname = GetModuleName(pinfo.processId);
                 printf("ModuleName: PPNAME = %ws, PNAME = %ws \r\n",ppname.c_str(),pname.c_str());
+            }
+            //Sleep(100);
+        }
+        if (_kmdfClose(handle))
+        {
+            printf("1 close error!\n");
+        }
+        break;
+    case '2':
+        handle = _kmdfOpen();
+        __Overlapped.hEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+        while (handle != INVALID_HANDLE_VALUE && idx <= 50)
+        {
+            memset(&pinfo, sizeof(PROCESSINFO), 0);
+            ret = _kmdfRead(handle, (PVOID)&pinfo, sizeof(PROCESSINFO), &ulResult, &__Overlapped);
+            printf("%d-%ld: PPID = %d, PID = %d NEW=%d \r\n",
+                idx++,
+                timeGetTime(),
+                (int)pinfo.parentId,
+                (int)pinfo.processId,
+                pinfo.isCreate);
+            if (pinfo.isCreate)
+            {
+                wstring ppname = GetModuleName(pinfo.parentId);
+                wstring pname = GetModuleName(pinfo.processId);
+                printf("ModuleName: PPNAME = %ws, PNAME = %ws \r\n", ppname.c_str(), pname.c_str());
             }
             //Sleep(100);
         }

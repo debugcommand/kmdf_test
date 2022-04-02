@@ -56,6 +56,7 @@ NTSTATUS CreateDevice(PDRIVER_OBJECT pDriverObject)
 	}
 
 	pDeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
+	pDeviceObject->Flags |= DO_BUFFERED_IO;
 
 	RtlInitUnicodeString(&usSymbolicName, L"\\??\\_ProcessMonitor");
 
@@ -106,57 +107,56 @@ NTSTATUS ReadCompleteRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 	ULONG				uLength = 0;
 
 	PVOID pBuffer = pIrp->AssociatedIrp.SystemBuffer;
-	ULONG ulInputlength = pIrpsp->Parameters.DeviceIoControl.InputBufferLength;
-	ULONG ulOutputlength = pIrpsp->Parameters.DeviceIoControl.OutputBufferLength;
+	ULONG ulBufferlength = pIrpsp->Parameters.Read.Length;
 
-	ASSERT(pBuffer != NULL);
-	ASSERT(ulInputlength == 0);
-
-	// 如果给出的 Buffer 大小小于 PROCESSINFO 结构体大小，则判断非法
-	if (ulOutputlength < sizeof(PROCESSINFO))
+	do
 	{
-		status = STATUS_INVALID_BUFFER_SIZE;
-		goto _OUT;
-	}
-
-	// 创建一个循环，不断从链表中拿是否有节点
-	while (TRUE)
-	{
-		PPROCESSNODE pNode = (PPROCESSNODE)ExInterlockedRemoveHeadList(&g_ListHead, &g_Lock);
-
-		// 如果拿到了节点，则传给应用层，直接想 pBuffer 里面赋值，应用层 DeviceIoControl 就能收到数据
-		if (NULL != pNode)
+		ASSERT(pBuffer != NULL);
+		ASSERT(ulBufferlength == 0);
+		// 如果给出的 Buffer 大小小于 PROCESSINFO 结构体大小，则判断非法
+		if (ulBufferlength < sizeof(PROCESSINFO))
 		{
-			PPROCESSINFO pProcessInfo = (PPROCESSINFO)pBuffer;
-			if (NULL != pNode->pProcessInfo)
+			status = STATUS_INVALID_BUFFER_SIZE;
+			goto _OUT;
+		}
+		// 创建一个循环，不断从链表中拿是否有节点
+		while (TRUE)
+		{
+			PPROCESSNODE pNode = (PPROCESSNODE)ExInterlockedRemoveHeadList(&g_ListHead, &g_Lock);
+
+			// 如果拿到了节点，则传给应用层，直接想 pBuffer 里面赋值，应用层 DeviceIoControl 就能收到数据
+			if (NULL != pNode)
 			{
-				// 给应用层 Buffer 赋值
-				pProcessInfo->parentId = pNode->pProcessInfo->parentId;
-				pProcessInfo->processId = pNode->pProcessInfo->processId;
-				pProcessInfo->isCreate = pNode->pProcessInfo->isCreate;
-				uLength = sizeof(PROCESSINFO);
-				KdPrint(("[t]io PPID = %d, PID = %d,New=%d..\r\n", pProcessInfo->parentId, pProcessInfo->processId, pProcessInfo->isCreate));
+				PPROCESSINFO pProcessInfo = (PPROCESSINFO)pBuffer;
+				if (NULL != pNode->pProcessInfo)
+				{
+					// 给应用层 Buffer 赋值
+					pProcessInfo->parentId = pNode->pProcessInfo->parentId;
+					pProcessInfo->processId = pNode->pProcessInfo->processId;
+					pProcessInfo->isCreate = pNode->pProcessInfo->isCreate;
+					uLength = sizeof(PROCESSINFO);
+					KdPrint(("[t]io PPID = %d, PID = %d,New=%d..\r\n", pProcessInfo->parentId, pProcessInfo->processId, pProcessInfo->isCreate));
+					// 释放内存
+					ExFreePoolWithTag(pNode->pProcessInfo, MEM_TAG);
+				}
 				// 释放内存
-				ExFreePoolWithTag(pNode->pProcessInfo, MEM_TAG);
+				ExFreePoolWithTag(pNode, MEM_TAG);
+				break;
 			}
-			// 释放内存
-			ExFreePoolWithTag(pNode, MEM_TAG);
-			break;
+			else
+			{
+				// 如果没有取到节点，则等待一个事件通知，该事件在 CreateProcessNotifyEx 函数中会被设置
+				// 当产生一个新的进程时会向链表插入一个节点，同时该事件被设置为有信号状态
+				// 随后 KeWaitForSingleObject 返回继续执行循环，继续执行时就可以取到新的节点数据了
+				KeWaitForSingleObject(&g_Event, Executive, KernelMode, 0, 0);
+			}
 		}
-		else
-		{
-			// 如果没有取到节点，则等待一个事件通知，该事件在 CreateProcessNotifyEx 函数中会被设置
-			// 当产生一个新的进程时会向链表插入一个节点，同时该事件被设置为有信号状态
-			// 随后 KeWaitForSingleObject 返回继续执行循环，继续执行时就可以取到新的节点数据了
-			KeWaitForSingleObject(&g_Event, Executive, KernelMode, 0, 0);
-		}
-	}
+	} while (FALSE);
 _OUT:
 	pIrp->IoStatus.Status = status;
-	pIrp->IoStatus.Information = 0;
+	pIrp->IoStatus.Information = uLength;
 	// 设置 Irp 请求已经处理完成，不要再继续传递
 	IoCompleteRequest(pIrp, IO_NO_INCREMENT);
-
 	return status;
 }
 

@@ -170,6 +170,7 @@
     </DriverSign>
     <Link>
       <AdditionalDependencies>wdmsec.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalOptions>/integritycheck /kernel %(AdditionalOptions)</AdditionalOptions>
     </Link>
     <ClCompile>
       <TreatWarningAsError>false</TreatWarningAsError>

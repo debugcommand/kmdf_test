@@ -5,11 +5,15 @@
 #include <Shlwapi.h>
 #include "common.h"
 #include "tlhelp32.h"
+#include <Psapi.h>
+#include <tchar.h>
 
 #define DLLNAME L"fmdfdll.dll"
 
 #pragma comment(lib,"shlwapi.lib")
 #pragma comment( lib,"winmm.lib" )
+#pragma comment (lib,"Psapi.lib")
+
 using namespace std;
 
 typedef void(*PrintCallback)(const char*);
@@ -85,9 +89,84 @@ wstring GetModuleName(DWORD dwPid)
     return L"";
 }
 
+BOOL DosPathToNtPath(LPTSTR pszDosPath, LPTSTR pszNtPath)
+{
+    TCHAR            szDriveStr[500];
+    TCHAR            szDrive[3];
+    TCHAR            szDevName[100];
+    INT                iDevName;
+    INT                i;
+
+    //检查参数
+    if (!pszDosPath || !pszNtPath)
+        return FALSE;
+
+    //获取本地磁盘所有盘符,以'\0'分隔,所以下面+4
+    if (GetLogicalDriveStrings(sizeof(szDriveStr), szDriveStr))
+    {
+        for (i = 0; szDriveStr[i]; i += 4)
+        {
+            if (!lstrcmpi(&(szDriveStr[i]), _T("A:\\")) || !lstrcmpi(&(szDriveStr[i]), _T("B:\\")))
+                continue;    //从C盘开始
+
+            //盘符
+            szDrive[0] = szDriveStr[i];
+            szDrive[1] = szDriveStr[i + 1];
+            szDrive[2] = '\0';
+            if (!QueryDosDevice(szDrive, szDevName, 100))//查询 Dos 设备名(盘符由NT查询DOS)
+                return FALSE;
+
+            iDevName = lstrlen(szDevName);
+            if (_tcsnicmp(pszDosPath, szDevName, iDevName) == 0)//是否为此盘
+            {
+                lstrcpy(pszNtPath, szDrive);//复制驱动器
+                lstrcat(pszNtPath, pszDosPath + iDevName);//复制路径
+
+                return TRUE;
+            }
+        }
+    }
+
+    lstrcpy(pszNtPath, pszDosPath);
+
+    return FALSE;
+}
+//获取进程完整路径
+BOOL GetProcessFullPath(DWORD dwPID)
+{
+    TCHAR        szImagePath[MAX_PATH];
+    TCHAR        pszFullPath[MAX_PATH];
+    HANDLE        hProcess;
+    if (!pszFullPath)
+        return FALSE;
+
+    pszFullPath[0] = '\0';
+
+    hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, 0, dwPID);    //由线程ID获得线程信息
+    if (!hProcess)
+        return FALSE;
+
+    if (!GetProcessImageFileName(hProcess, szImagePath, MAX_PATH))    //得到线程完整DOS路径
+    {
+        CloseHandle(hProcess);
+        return FALSE;
+    }
+    if (!DosPathToNtPath(szImagePath, pszFullPath))    //DOS路径转NT路径
+    {
+        CloseHandle(hProcess);
+        return FALSE;
+    }
+
+    CloseHandle(hProcess);
+
+    _tprintf(_T("%5d  %s \r\n"), dwPID, pszFullPath);
+    return TRUE;
+}
+
 PROCESSINFO pinfo;
 int main()
 {
+    setlocale(LC_ALL, "chs");    //不设置解析中文字符时可能会出问题
     if (!InitLibrary())
     {
         system("pause");
@@ -131,9 +210,11 @@ int main()
                 pinfo.isCreate);
             if (pinfo.isCreate)
             {
-                wstring ppname = GetModuleName(pinfo.parentId);
+                /*wstring ppname = GetModuleName(pinfo.parentId);
                 wstring pname = GetModuleName(pinfo.processId);
-                printf("ModuleName: PPNAME = %ws, PNAME = %ws \r\n",ppname.c_str(),pname.c_str());
+                printf("ModuleName: PPNAME = %ws, PNAME = %ws \r\n",ppname.c_str(),pname.c_str());*/
+                GetProcessFullPath(pinfo.parentId);
+                GetProcessFullPath(pinfo.processId);
             }
             //Sleep(100);
         }
@@ -145,7 +226,7 @@ int main()
     case '2':
         handle = _kmdfOpen();
         __Overlapped.hEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
-        while (handle != INVALID_HANDLE_VALUE && idx <= 50)
+        while (handle != INVALID_HANDLE_VALUE)
         {
             memset(&pinfo, sizeof(PROCESSINFO), 0);
             ret = _kmdfRead(handle, (PVOID)&pinfo, sizeof(PROCESSINFO), &ulResult, &__Overlapped);
@@ -157,9 +238,11 @@ int main()
                 pinfo.isCreate);
             if (pinfo.isCreate)
             {
-                wstring ppname = GetModuleName(pinfo.parentId);
+                /*wstring ppname = GetModuleName(pinfo.parentId);
                 wstring pname = GetModuleName(pinfo.processId);
-                printf("ModuleName: PPNAME = %ws, PNAME = %ws \r\n", ppname.c_str(), pname.c_str());
+                printf("ModuleName: PPNAME = %ws, PNAME = %ws \r\n", ppname.c_str(), pname.c_str());*/
+                GetProcessFullPath(pinfo.parentId);
+                GetProcessFullPath(pinfo.processId);
             }
             //Sleep(100);
         }

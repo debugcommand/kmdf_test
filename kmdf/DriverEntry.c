@@ -10,8 +10,16 @@ LIST_ENTRY		g_ListHead;		// 链表头
 KEVENT			g_Event;		// 用于通知的事件
 BOOLEAN			g_Collect;		// 开始收集
 
+NTKERNELAPI
+UCHAR* PsGetProcessImageFileName(__in PEPROCESS Process);
+
 VOID CreateProcessRoutineSpy(
 	IN HANDLE  parentId, IN HANDLE  processId, IN BOOLEAN  isCreate
+);
+VOID CreateProcessRoutineSpyEx(
+	_Inout_ PEPROCESS Process,
+	_In_ HANDLE ProcessId,
+	_Inout_opt_ PPS_CREATE_NOTIFY_INFO CreateInfo
 );
 
 typedef struct
@@ -108,55 +116,52 @@ NTSTATUS ReadCompleteRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 
 	PVOID pBuffer = pIrp->AssociatedIrp.SystemBuffer;
 	ULONG ulBufferlength = pIrpsp->Parameters.Read.Length;
-
-	do
+	ASSERT(pBuffer != NULL);
+	ASSERT(ulBufferlength == 0);
+	// 如果给出的 Buffer 大小小于 PROCESSINFO 结构体大小，则判断非法
+	if (ulBufferlength < sizeof(PROCESSINFO))
 	{
-		ASSERT(pBuffer != NULL);
-		ASSERT(ulBufferlength == 0);
-		// 如果给出的 Buffer 大小小于 PROCESSINFO 结构体大小，则判断非法
-		if (ulBufferlength < sizeof(PROCESSINFO))
-		{
-			status = STATUS_INVALID_BUFFER_SIZE;
-			goto _OUT;
-		}
-		// 创建一个循环，不断从链表中拿是否有节点
-		while (TRUE)
-		{
-			PPROCESSNODE pNode = (PPROCESSNODE)ExInterlockedRemoveHeadList(&g_ListHead, &g_Lock);
+		status = STATUS_INVALID_BUFFER_SIZE;
+		goto _OUT;
+	}
+	// 创建一个循环，不断从链表中拿是否有节点
+	while (TRUE)
+	{
+		PPROCESSNODE pNode = (PPROCESSNODE)ExInterlockedRemoveHeadList(&g_ListHead, &g_Lock);
 
-			// 如果拿到了节点，则传给应用层，直接想 pBuffer 里面赋值，应用层 DeviceIoControl 就能收到数据
-			if (NULL != pNode)
+		// 如果拿到了节点，则传给应用层，直接想 pBuffer 里面赋值，应用层 DeviceIoControl 就能收到数据
+		if (NULL != pNode)
+		{
+			PPROCESSINFO pProcessInfo = (PPROCESSINFO)pBuffer;
+			if (NULL != pNode->pProcessInfo)
 			{
-				PPROCESSINFO pProcessInfo = (PPROCESSINFO)pBuffer;
-				if (NULL != pNode->pProcessInfo)
-				{
-					// 给应用层 Buffer 赋值
-					pProcessInfo->parentId = pNode->pProcessInfo->parentId;
-					pProcessInfo->processId = pNode->pProcessInfo->processId;
-					pProcessInfo->isCreate = pNode->pProcessInfo->isCreate;
-					uLength = sizeof(PROCESSINFO);
-					KdPrint(("[t]io PPID = %d, PID = %d,New=%d..\r\n", pProcessInfo->parentId, pProcessInfo->processId, pProcessInfo->isCreate));
-					// 释放内存
-					ExFreePoolWithTag(pNode->pProcessInfo, MEM_TAG);
-				}
+				// 给应用层 Buffer 赋值
+				pProcessInfo->parentId = pNode->pProcessInfo->parentId;
+				pProcessInfo->processId = pNode->pProcessInfo->processId;
+				pProcessInfo->isCreate = pNode->pProcessInfo->isCreate;
+				uLength = sizeof(PROCESSINFO);
+				KdPrint(("[t]Read PPID = %d, PID = %d,New=%d..\r\n", pProcessInfo->parentId, pProcessInfo->processId, pProcessInfo->isCreate));
 				// 释放内存
-				ExFreePoolWithTag(pNode, MEM_TAG);
-				break;
+				ExFreePoolWithTag(pNode->pProcessInfo, MEM_TAG);
 			}
-			else
-			{
-				// 如果没有取到节点，则等待一个事件通知，该事件在 CreateProcessNotifyEx 函数中会被设置
-				// 当产生一个新的进程时会向链表插入一个节点，同时该事件被设置为有信号状态
-				// 随后 KeWaitForSingleObject 返回继续执行循环，继续执行时就可以取到新的节点数据了
-				KeWaitForSingleObject(&g_Event, Executive, KernelMode, 0, 0);
-			}
+			// 释放内存
+			ExFreePoolWithTag(pNode, MEM_TAG);
+			break;
 		}
-	} while (FALSE);
+		else
+		{
+			// 如果没有取到节点，则等待一个事件通知，该事件在 CreateProcessNotifyEx 函数中会被设置
+			// 当产生一个新的进程时会向链表插入一个节点，同时该事件被设置为有信号状态
+			// 随后 KeWaitForSingleObject 返回继续执行循环，继续执行时就可以取到新的节点数据了
+			KeWaitForSingleObject(&g_Event, Executive, KernelMode, 0, 0);
+		}
+	}
 _OUT:
 	pIrp->IoStatus.Status = status;
 	pIrp->IoStatus.Information = uLength;
 	// 设置 Irp 请求已经处理完成，不要再继续传递
 	IoCompleteRequest(pIrp, IO_NO_INCREMENT);
+	KdPrint(("[t]ReadCompleteRoutine status:0x%08X \r\n", status));
 	return status;
 }
 
@@ -224,7 +229,7 @@ NTSTATUS DeviceControlCompleteRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 						pProcessInfo->processId = pNode->pProcessInfo->processId;
 						pProcessInfo->isCreate = pNode->pProcessInfo->isCreate;
 						uLength = sizeof(PROCESSINFO);
-						KdPrint(("[t]io PPID = %d, PID = %d,New=%d..\r\n", pProcessInfo->parentId, pProcessInfo->processId, pProcessInfo->isCreate));
+						KdPrint(("[t]IOCtrl PPID = %d, PID = %d,New=%d..\r\n", pProcessInfo->parentId, pProcessInfo->processId, pProcessInfo->isCreate));
 						// 释放内存
 						ExFreePoolWithTag(pNode->pProcessInfo, MEM_TAG);
 					}
@@ -250,7 +255,6 @@ NTSTATUS DeviceControlCompleteRoutine(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 		}
 	} while (FALSE);
 
-
 	pIrp->IoStatus.Status = status;
 	pIrp->IoStatus.Information = uLength;
 	IoCompleteRequest(pIrp, IO_NO_INCREMENT);
@@ -264,7 +268,7 @@ VOID CreateProcessRoutineSpy(
 {
 	if (!g_Collect)
 	{
-		KdPrint(("[t]ignore PPID = %d, PID = %d,New=%d..\r\n", parentId, processId, isCreate));
+		KdPrint(("[t]ignore PPID = %d, PID = %d,New=%d..\r\n", (int)parentId, (int)processId, isCreate));
 		return;
 	}
 	// 创建一个链表节点
@@ -281,13 +285,32 @@ VOID CreateProcessRoutineSpy(
 			pNode->pProcessInfo->parentId = parentId;
 			pNode->pProcessInfo->processId = processId;
 			pNode->pProcessInfo->isCreate = isCreate;
-			KdPrint(("[t]PPID = %d, PID = %d,New=%d..\r\n", parentId, processId, isCreate));
+			KdPrint(("[t]Collect PPID = %d, PID = %d,New=%d..\r\n", parentId, processId, isCreate));
 			// 插入链表，设置事件
 			ExInterlockedInsertTailList(&g_ListHead, (PLIST_ENTRY)pNode, &g_Lock);
 		}
 		// 这里第三个参数一定要注意，如果为 TRUE 则表示 KeSetEvent 后面一定会有一个 KeWaitForSigleObject
 		// 而如果 KeWaitForSigleObject 不在 KeSetEvent 调用之后，则设置为 FLASE，否则会导致 0x0000004A 蓝屏
 		KeSetEvent(&g_Event, 0, FALSE);
+	}
+}
+
+VOID CreateProcessRoutineSpyEx(
+	_Inout_ PEPROCESS Process,
+	_In_ HANDLE ProcessId,
+	_Inout_opt_ PPS_CREATE_NOTIFY_INFO CreateInfo)
+{
+	PUCHAR ExeName = PsGetProcessImageFileName(Process);
+	KdPrint(("[t]Ex PNAME=%s,PID = %d,New=%d..\r\n", ExeName,(int)ProcessId, CreateInfo != NULL));
+	if (CreateInfo)
+	{
+		
+		KdPrint(("[t]Ex FileOpenNameAvailable=%d,IsSubsystemProcess = %d,PPID=%d..\r\n", CreateInfo->FileOpenNameAvailable,CreateInfo->IsSubsystemProcess, CreateInfo->ParentProcessId));
+		if (CreateInfo->IsSubsystemProcess)
+		{
+			KdPrint(("[t]Ex FileName=%s..\r\n", CreateInfo->FileObject->FileName.Buffer));
+		}
+		KdPrint(("[t]Ex ImageFileName=%s..\r\n", CreateInfo->ImageFileName));
 	}
 }
 
@@ -307,6 +330,7 @@ VOID DriverUnLoad(PDRIVER_OBJECT pDriverObject)
 	g_Collect = FALSE;
 	// 恢复进程监控回调
 	NTSTATUS status = PsSetCreateProcessNotifyRoutine(CreateProcessRoutineSpy, TRUE);
+	//NTSTATUS status = PsSetCreateProcessNotifyRoutineEx(CreateProcessRoutineSpyEx, TRUE);
 	if (!NT_SUCCESS(status))
 	{
 		KdPrint(("[t]Failed to call PsSetCreateProcessNotifyRoutineEx, error code = 0x%08X\r\n", status));
@@ -358,6 +382,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT pDriverObject, PUNICODE_STRING pRegistryPath
 	g_Collect = FALSE;
 	// 创建进程监视回调
 	status = PsSetCreateProcessNotifyRoutine(CreateProcessRoutineSpy, FALSE);
+	//status = PsSetCreateProcessNotifyRoutineEx(CreateProcessRoutineSpyEx, FALSE);
 	if (!NT_SUCCESS(status))
 	{
 		KdPrint(("[t]Failed to call PsSetCreateProcessNotifyRoutineEx, error code = 0x%08X\r\n", status));
